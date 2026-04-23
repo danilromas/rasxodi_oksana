@@ -1,0 +1,15 @@
+Options -MultiViews
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+RewriteEngine On
+
+# If the requested path is an existing file or directory, serve it as-is.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Otherwise, do NOT rewrite anything to the site root.
+# (Keeps parent folder rewrite rules from hijacking /antikvar/crm/*)
+</IfModule>
+
