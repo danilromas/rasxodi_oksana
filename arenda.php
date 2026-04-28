@@ -190,7 +190,6 @@
                             <option value="all">Все типы</option>
                             <option value="ramnye">Рамные</option>
                             <option value="vyshka">Вышка</option>
-                            <option value="lestnicy">Лестницы</option>
                         </select>
                         <button class="btn-primary" onclick="openRentalModal()">➕ Новая аренда</button>
                     </div>
@@ -325,7 +324,6 @@
                         <select id="rental-type" required onchange="toggleFields()">
                             <option value="ramnye">Рамные леса</option>
                             <option value="vyshka">Вышка-тура</option>
-                            <option value="lestnicy">Лестницы</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -389,6 +387,65 @@
                 </div>
                 <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
                     <button type="button" class="btn-secondary" onclick="closeModal('rental-modal')">Отмена</button>
+                    <button type="submit" class="btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно завершения аренды -->
+    <div class="modal" id="close-rental-modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <h2 style="margin-bottom: 20px;">Завершить аренду</h2>
+            <div id="close-rental-info" style="margin-bottom: 20px; line-height: 1.6; background: #f8f9fa; padding: 15px; border-radius: 10px;"></div>
+            <form id="close-rental-form">
+                <input type="hidden" id="close-rental-id">
+                <div class="form-group">
+                    <label>Дата завершения</label>
+                    <input type="date" id="close-rental-date" required onchange="updateCloseInfo()">
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn-secondary" onclick="closeModal('close-rental-modal')">Отмена</button>
+                    <button type="submit" class="btn-success">Завершить и закрыть</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно добора/изменения -->
+    <div class="modal" id="adjustment-modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <h2 style="margin-bottom: 20px;">Добор лесов / Изменение условий</h2>
+            <div id="adjustment-info" style="margin-bottom: 20px; background: #f8f9fa; padding: 15px; border-radius: 10px; font-size: 0.9em;"></div>
+            
+            <form id="adjustment-form">
+                <input type="hidden" id="adj-rental-id">
+                <div class="form-group">
+                    <label>Дата изменения</label>
+                    <input type="date" id="adj-date" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Новая цена за сутки (₽)</label>
+                        <input type="number" id="adj-daily-rate" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Новые м² (всего)</label>
+                        <input type="number" id="adj-square-meters" step="0.01" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Комментарий (что изменилось)</label>
+                    <textarea id="adj-comment" rows="2" placeholder="Например: Добор 50м2"></textarea>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <h4 style="margin-bottom: 10px;">История изменений:</h4>
+                    <div id="adjustment-history" style="max-height: 150px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 10px;"></div>
+                </div>
+
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn-secondary" onclick="closeModal('adjustment-modal')">Отмена</button>
                     <button type="submit" class="btn-primary">Сохранить</button>
                 </div>
             </form>
@@ -477,9 +534,61 @@
             });
         }
 
+        function calculateRentalStats(r, targetDateStr) {
+            const targetDate = new Date(targetDateStr);
+            targetDate.setHours(0, 0, 0, 0);
+            
+            const startDate = new Date(r.date_start);
+            startDate.setHours(0, 0, 0, 0);
+            
+            if (targetDate < startDate) return { totalCost: 0, currentRate: 0, currentM2: 0, daysUsed: 0 };
+
+            // Сортируем корректировки по дате
+            const adjs = (r.adjustments || []).map(a => ({
+                ...a,
+                date: new Date(a.date_change)
+            })).sort((a, b) => a.date - b.date);
+
+            let totalCost = 0;
+            let currentRate = parseFloat(r.daily_rate || 0);
+            let currentM2 = parseFloat(r.square_meters || 0);
+            let currentDate = new Date(startDate);
+
+            for (const adj of adjs) {
+                if (adj.date > targetDate) break;
+                if (adj.date <= startDate) {
+                    // Если корректировка в день начала или раньше, просто обновляем начальные значения
+                    currentRate = parseFloat(adj.new_daily_rate);
+                    currentM2 = parseFloat(adj.new_square_meters);
+                    continue;
+                }
+
+                // Считаем дни до этой корректировки
+                const days = Math.floor((adj.date - currentDate) / (1000 * 60 * 60 * 24));
+                totalCost += days * currentRate;
+                
+                currentRate = parseFloat(adj.new_daily_rate);
+                currentM2 = parseFloat(adj.new_square_meters);
+                currentDate = new Date(adj.date);
+            }
+
+            // Считаем оставшиеся дни до целевой даты (включая целевую дату)
+            const remainingDays = Math.floor((targetDate - currentDate) / (1000 * 60 * 60 * 24)) + 1;
+            totalCost += remainingDays * currentRate;
+
+            const totalDays = Math.floor((targetDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+
+            return {
+                totalCost,
+                currentRate,
+                currentM2,
+                daysUsed: totalDays
+            };
+        }
+
         function renderRentals() {
             const tbody = document.getElementById('rentals-body');
-            const calcDate = new Date(document.getElementById('calc-date').value);
+            const calcDateStr = document.getElementById('calc-date').value;
             const search = document.getElementById('rental-search').value.toLowerCase();
             const filterType = document.getElementById('rental-filter-type').value;
 
@@ -497,37 +606,43 @@
             }
 
             let totals = { 
-                ramnye: 0, vyshka: 0, lestnicy: 0,
-                daily: { ramnye: 0, vyshka: 0, lestnicy: 0, total: 0 }, 
+                ramnye: 0, vyshka: 0,
+                daily: { ramnye: 0, vyshka: 0, total: 0 }, 
                 m2: 0 
             };
 
             tbody.innerHTML = filtered.map(r => {
-                const startDate = new Date(r.date_start);
-                const diffTime = Math.max(0, calcDate - startDate);
-                const daysUsed = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-                const sumRent = daysUsed * r.daily_rate;
+                const stats = calculateRentalStats(r, calcDateStr);
+                const sumRent = stats.totalCost;
                 const remainder = parseFloat(r.deposit) + parseFloat(r.paid_rent) - sumRent;
+                const paidRentBalance = parseFloat(r.paid_rent) - sumRent;
                 
-                // Расчет оставшихся дней аренды на основе ОПЛАЧЕННОЙ суммы (paid_rent)
-                const totalPaidDays = r.daily_rate > 0 ? Math.floor(parseFloat(r.paid_rent) / parseFloat(r.daily_rate)) : 0;
-                const daysRemaining = totalPaidDays - daysUsed;
+                // Отдельно считаем:
+                // 1) сколько дней до начала расходования залога
+                // 2) сколько дней до полного ухода в долг
+                const daysUntilDeposit = stats.currentRate > 0 ? Math.ceil(paidRentBalance / stats.currentRate) : Infinity;
+                const daysUntilDebt = stats.currentRate > 0 ? Math.ceil(remainder / stats.currentRate) : Infinity;
                 
                 let rowClass = '';
                 let statusBadge = '';
                 
-                if (daysRemaining <= 0) {
+                if (remainder < 0) {
                     rowClass = 'debtor';
-                    statusBadge = '<span class="badge-warning">Срок истек</span>';
-                } else if (daysRemaining <= 3) {
+                    statusBadge = '<span class="badge-warning">Долг</span>';
+                } else if (paidRentBalance < 0) {
+                    rowClass = 'debtor';
+                    statusBadge = daysUntilDebt <= 3
+                        ? `<span class="badge-warning">До долга: ${Math.max(0, daysUntilDebt)} дн.</span>`
+                        : '<span class="badge-warning">Тратится залог</span>';
+                } else if (daysUntilDeposit <= 3) {
                     rowClass = 'warning';
-                    statusBadge = `<span class="badge-warning">Осталось: ${daysRemaining} дн.</span>`;
+                    statusBadge = `<span class="badge-warning">До залога: ${Math.max(0, daysUntilDeposit)} дн.</span>`;
                 }
 
                 totals[r.type] += remainder;
-                totals.daily[r.type] += parseFloat(r.daily_rate);
-                totals.daily.total += parseFloat(r.daily_rate);
-                totals.m2 += parseFloat(r.square_meters || 0);
+                totals.daily[r.type] += stats.currentRate;
+                totals.daily.total += stats.currentRate;
+                totals.m2 += stats.currentM2;
 
                 const commentEscaped = r.comment ? r.comment.replace(/'/g, "\\'").replace(/"/g, "&quot;").replace(/\n/g, "\\n").replace(/\r/g, "") : '';
 
@@ -540,13 +655,13 @@
                         <td>${r.client_name} ${statusBadge}</td>
                         <td>${r.dogovor || ''} ${r.akt ? '/ ' + r.akt : ''}</td>
                         <td>${formatDate(r.date_start)}</td>
-                        <td>${daysUsed}</td>
-                        <td>${formatMoney(r.daily_rate)}</td>
+                        <td>${stats.daysUsed}</td>
+                        <td>${formatMoney(stats.currentRate)}</td>
                         <td>${formatMoney(sumRent)}</td>
                         <td>${formatMoney(r.deposit)}</td>
                         <td>${formatMoney(r.paid_rent)}</td>
                         <td style="font-weight:bold">${formatMoney(remainder)}</td>
-                        <td>${r.square_meters || 0}</td>
+                        <td>${stats.currentM2.toFixed(2)}</td>
                         <td>${r.phone || ''}</td>
                         <td>
                             <div style="display:flex; gap:5px;">
@@ -554,6 +669,7 @@
                                     ${r.is_debtor ? '👤✅' : '👤❌'}
                                 </button>
                                 <button class="btn-success" onclick="closeRental(${r.id})" title="Закрыть">✅</button>
+                                <button class="btn-secondary" onclick="openAdjustmentModal(${r.id})" title="Добор / Изменение">🏗️+</button>
                                 <button class="btn-secondary" onclick="editRental(${r.id})" title="Редактировать">✏️</button>
                                 <button class="btn-danger" onclick="deleteRental(${r.id})" title="Удалить">🗑️</button>
                             </div>
@@ -571,16 +687,14 @@
                 <tr class="summary-row">
                     <td colspan="5">К возврату:</td>
                     <td colspan="4">
-                        Рамные: ${formatMoney(totals.ramnye)} | Вышки: ${formatMoney(totals.vyshka)} | 
-                        Лестницы: ${formatMoney(totals.lestnicy)}
+                        Рамные: ${formatMoney(totals.ramnye)} | Вышки: ${formatMoney(totals.vyshka)}
                     </td>
-                    <td colspan="4">Общее к возврату: ${formatMoney(totals.ramnye + totals.vyshka + totals.lestnicy)}</td>
+                    <td colspan="4">Общее к возврату: ${formatMoney(totals.ramnye + totals.vyshka)}</td>
                 </tr>
                 <tr class="summary-row">
                     <td colspan="5">Аренда в сутки:</td>
                     <td colspan="4">
-                        Рамные: ${formatMoney(totals.daily.ramnye)} | Вышки: ${formatMoney(totals.daily.vyshka)} | 
-                        Лестницы: ${formatMoney(totals.daily.lestnicy)}
+                        Рамные: ${formatMoney(totals.daily.ramnye)} | Вышки: ${formatMoney(totals.daily.vyshka)}
                     </td>
                     <td colspan="4">Общая аренда в сутки: ${formatMoney(totals.daily.total)} | Итого м²: ${totals.m2.toFixed(2)}</td>
                 </tr>
@@ -589,16 +703,14 @@
 
         function renderDebtors() {
             const tbody = document.getElementById('debtors-body');
-            const calcDate = new Date(document.getElementById('calc-date').value);
+            const calcDateStr = document.getElementById('calc-date').value;
             
             // Фильтруем ТОЛЬКО тех, кто отмечен как должник вручную
             const debtors = rentals.filter(r => r.status === 'active' && r.is_debtor);
 
             tbody.innerHTML = debtors.map(r => {
-                const startDate = new Date(r.date_start);
-                const diffTime = Math.max(0, calcDate - startDate);
-                const days = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-                const sumRent = days * r.daily_rate;
+                const stats = calculateRentalStats(r, calcDateStr);
+                const sumRent = stats.totalCost;
                 const remainder = parseFloat(r.deposit) + parseFloat(r.paid_rent) - sumRent;
                 const commentEscaped = r.comment ? r.comment.replace(/'/g, "\\'").replace(/"/g, "&quot;").replace(/\n/g, "\\n").replace(/\r/g, "") : '';
 
@@ -610,7 +722,7 @@
                         <td>${getTypeLabel(r.type)}</td>
                         <td>${r.client_name}</td>
                         <td>${r.dogovor || ''}</td>
-                        <td>${days}</td>
+                        <td>${stats.daysUsed}</td>
                         <td>${formatMoney(sumRent)}</td>
                         <td>${formatMoney(r.deposit)}</td>
                         <td>${formatMoney(r.paid_rent)}</td>
@@ -633,11 +745,8 @@
             const completed = rentals.filter(r => r.status === 'closed');
 
             tbody.innerHTML = completed.map(r => {
-                const startDate = new Date(r.date_start);
-                const endDate = new Date(r.date_end);
-                const diffTime = Math.max(0, endDate - startDate);
-                const daysUsed = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-                const sumRent = daysUsed * r.daily_rate;
+                const stats = calculateRentalStats(r, r.date_end);
+                const sumRent = stats.totalCost;
                 const commentEscaped = r.comment ? r.comment.replace(/'/g, "\\'").replace(/"/g, "&quot;").replace(/\n/g, "\\n").replace(/\r/g, "") : '';
 
                 return `
@@ -669,36 +778,34 @@
             if (!startStr || !endStr) return;
 
             const periodStart = new Date(startStr);
+            periodStart.setHours(0, 0, 0, 0);
             const periodEnd = new Date(endStr);
             periodEnd.setHours(23, 59, 59, 999);
 
             const totalProfit = rentals.reduce((sum, r) => {
                 const rentalStart = new Date(r.date_start);
-                // Для активных аренд считаем до сегодня, для закрытых - до date_end
+                rentalStart.setHours(0, 0, 0, 0);
                 const rentalEnd = r.status === 'closed' && r.date_end ? new Date(r.date_end) : new Date();
+                rentalEnd.setHours(0, 0, 0, 0);
                 
-                const daysInPeriod = getDaysInPeriod(rentalStart, rentalEnd, periodStart, periodEnd);
-                const earnedInPeriod = daysInPeriod * parseFloat(r.daily_rate || 0);
+                const startOverlap = new Date(Math.max(rentalStart, periodStart));
+                const endOverlap = new Date(Math.min(rentalEnd, periodEnd));
                 
+                if (startOverlap > endOverlap) return sum;
+
+                // Считаем общую стоимость на конец периода и вычитаем стоимость на день до начала периода
+                const statsEnd = calculateRentalStats(r, endOverlap.toISOString().split('T')[0]);
+                
+                const dayBeforeStart = new Date(startOverlap);
+                dayBeforeStart.setDate(dayBeforeStart.getDate() - 1);
+                const statsStart = calculateRentalStats(r, dayBeforeStart.toISOString().split('T')[0]);
+                
+                const earnedInPeriod = statsEnd.totalCost - statsStart.totalCost;
                 return sum + earnedInPeriod;
             }, 0);
 
             document.getElementById('total-profit').textContent = formatMoney(totalProfit);
             renderCharts();
-        }
-
-        function getDaysInPeriod(rentalStart, rentalEnd, periodStart, periodEnd) {
-            const start = new Date(Math.max(rentalStart, periodStart));
-            const end = new Date(Math.min(rentalEnd, periodEnd));
-            
-            if (start > end) return 0;
-            
-            // Сбрасываем время для точного расчета дней
-            start.setHours(0, 0, 0, 0);
-            end.setHours(0, 0, 0, 0);
-            
-            const diffTime = Math.max(0, end - start);
-            return Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
         }
 
         function renderCharts() {
@@ -714,15 +821,27 @@
                 
                 // Начало и конец этого месяца для расчета
                 const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
-                const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+                monthStart.setHours(0, 0, 0, 0);
+                const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+                monthEnd.setHours(23, 59, 59, 999);
                 
                 let monthProfit = 0;
                 rentals.forEach(r => {
                     const rentalStart = new Date(r.date_start);
+                    rentalStart.setHours(0, 0, 0, 0);
                     const rentalEnd = r.status === 'closed' && r.date_end ? new Date(r.date_end) : new Date();
+                    rentalEnd.setHours(0, 0, 0, 0);
                     
-                    const daysInMonth = getDaysInPeriod(rentalStart, rentalEnd, monthStart, monthEnd);
-                    monthProfit += daysInMonth * parseFloat(r.daily_rate || 0);
+                    const startOverlap = new Date(Math.max(rentalStart, monthStart));
+                    const endOverlap = new Date(Math.min(rentalEnd, monthEnd));
+                    
+                    if (startOverlap <= endOverlap) {
+                        const statsEnd = calculateRentalStats(r, endOverlap.toISOString().split('T')[0]);
+                        const dayBeforeStart = new Date(startOverlap);
+                        dayBeforeStart.setDate(dayBeforeStart.getDate() - 1);
+                        const statsStart = calculateRentalStats(r, dayBeforeStart.toISOString().split('T')[0]);
+                        monthProfit += (statsEnd.totalCost - statsStart.totalCost);
+                    }
                 });
 
                 monthlyData[key] = { 
@@ -769,7 +888,7 @@
             });
 
             // 2. Распределение по типам (все аренды)
-            const typeCounts = { ramnye: 0, vyshka: 0, lestnicy: 0 };
+            const typeCounts = { ramnye: 0, vyshka: 0 };
             rentals.forEach(r => {
                 if (typeCounts[r.type] !== undefined) typeCounts[r.type]++;
             });
@@ -779,13 +898,12 @@
             typesChart = new Chart(ctx2, {
                 type: 'doughnut',
                 data: {
-                    labels: ['Рамные', 'Вышка', 'Лестницы'],
+                    labels: ['Рамные', 'Вышка'],
                     datasets: [{
-                        data: [typeCounts.ramnye, typeCounts.vyshka, typeCounts.lestnicy],
+                        data: [typeCounts.ramnye, typeCounts.vyshka],
                         backgroundColor: [
                             'rgba(30, 60, 114, 0.8)',
-                            'rgba(42, 82, 152, 0.8)',
-                            'rgba(108, 117, 125, 0.8)'
+                            'rgba(42, 82, 152, 0.8)'
                         ],
                         borderWidth: 2,
                         borderColor: '#fff'
@@ -805,8 +923,7 @@
             const container = document.getElementById('inventory-container');
             const categories = {
                 ramnye: 'Рамные леса',
-                vyshka: 'Вышка-тура',
-                lestnicy: 'Лестницы'
+                vyshka: 'Вышка-тура'
             };
 
             container.innerHTML = Object.entries(categories).map(([cat, label]) => {
@@ -829,7 +946,7 @@
 
         // Вспомогательные функции
         function getTypeLabel(type) {
-            const types = { ramnye: 'Рамные', vyshka: 'Вышка', lestnicy: 'Лестницы' };
+            const types = { ramnye: 'Рамные', vyshka: 'Вышка' };
             return types[type] || type;
         }
 
@@ -948,36 +1065,118 @@
             }
         }
 
+        function updateCloseInfo() {
+            const id = document.getElementById('close-rental-id').value;
+            const closeDateStr = document.getElementById('close-rental-date').value;
+            const r = rentals.find(rent => rent.id == id);
+            if (!r || !closeDateStr) return;
+
+            const stats = calculateRentalStats(r, closeDateStr);
+            const sumRentUsed = stats.totalCost;
+            
+            const remainder = parseFloat(r.deposit) + parseFloat(r.paid_rent) - sumRentUsed;
+
+            document.getElementById('close-rental-info').innerHTML = `
+                <strong>Клиент:</strong> ${r.client_name}<br>
+                <strong>Дней аренды:</strong> ${stats.daysUsed}<br>
+                <strong>Стоимость аренды:</strong> ${formatMoney(sumRentUsed)}<br>
+                <strong>Оплачено за аренду:</strong> ${formatMoney(r.paid_rent)}<br>
+                <strong>Залог:</strong> ${formatMoney(r.deposit)}<br><br>
+                <strong style="${remainder < 0 ? 'color: #dc3545;' : 'color: #28a745;'} font-size: 1.2em;">
+                    ${remainder < 0 ? 'ДОЛГ КЛИЕНТА' : 'К ВОЗВРАТУ'}: ${formatMoney(Math.abs(remainder))}
+                </strong>
+            `;
+        }
+
+        async function openAdjustmentModal(id) {
+            const r = rentals.find(rent => rent.id == id);
+            if (!r) return;
+
+            document.getElementById('adj-rental-id').value = id;
+            document.getElementById('adj-date').value = new Date().toISOString().split('T')[0];
+            
+            // Текущие показатели из статистики на сегодня
+            const today = new Date().toISOString().split('T')[0];
+            const stats = calculateRentalStats(r, today);
+            
+            document.getElementById('adj-daily-rate').value = stats.currentRate;
+            document.getElementById('adj-square-meters').value = stats.currentM2;
+            document.getElementById('adj-comment').value = '';
+
+            document.getElementById('adjustment-info').innerHTML = `
+                <strong>Клиент:</strong> ${r.client_name}<br>
+                <strong>Текущие условия:</strong> ${formatMoney(stats.currentRate)}/день, ${stats.currentM2} м²
+            `;
+
+            // История
+            const historyDiv = document.getElementById('adjustment-history');
+            if (r.adjustments && r.adjustments.length > 0) {
+                historyDiv.innerHTML = r.adjustments.map(a => `
+                    <div style="font-size: 0.85em; margin-bottom: 5px; border-bottom: 1px solid #f0f0f0; padding-bottom: 5px;">
+                        <strong>${formatDate(a.date_change)}</strong>: ${formatMoney(a.new_daily_rate)}/день, ${a.new_square_meters} м²
+                        ${a.comment ? `<br><span style="color: #666;">${a.comment}</span>` : ''}
+                        <button class="btn-danger" style="padding: 2px 5px; font-size: 0.8em; margin-left: 10px;" onclick="deleteAdjustment(${a.id})">🗑️</button>
+                    </div>
+                `).join('');
+            } else {
+                historyDiv.innerHTML = '<div style="color: #999;">Нет изменений</div>';
+            }
+
+            document.getElementById('adjustment-modal').classList.add('active');
+        }
+
+        document.getElementById('adjustment-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const data = {
+                rental_id: document.getElementById('adj-rental-id').value,
+                date_change: document.getElementById('adj-date').value,
+                new_daily_rate: document.getElementById('adj-daily-rate').value,
+                new_square_meters: document.getElementById('adj-square-meters').value,
+                comment: document.getElementById('adj-comment').value
+            };
+
+            await fetch(`${API_URL}?action=save_adjustment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            
+            closeModal('adjustment-modal');
+            loadRentals();
+        };
+
+        async function deleteAdjustment(id) {
+            if (confirm('Удалить это изменение?')) {
+                await fetch(`${API_URL}?action=delete_adjustment&id=${id}`, { method: 'DELETE' });
+                closeModal('adjustment-modal');
+                loadRentals();
+            }
+        }
+
+        document.getElementById('close-rental-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('close-rental-id').value;
+            const date_end = document.getElementById('close-rental-date').value;
+
+            if (confirm('Вы уверены, что хотите завершить аренду этой датой?')) {
+                await fetch(`${API_URL}?action=close_rental`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, date_end })
+                });
+                closeModal('close-rental-modal');
+                loadRentals();
+            }
+        };
+
         async function closeRental(id) {
             const r = rentals.find(rent => rent.id == id);
             if (!r) return;
 
-            const calcDate = new Date();
-            const startDate = new Date(r.date_start);
-            const diffTime = Math.max(0, calcDate - startDate);
-            const daysUsed = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-            const sumRentUsed = daysUsed * r.daily_rate;
-            
-            // Расчет возврата: Залог + (Оплачено - Использовано)
-            const unusedRent = Math.max(0, parseFloat(r.paid_rent) - sumRentUsed);
-            const refundTotal = parseFloat(r.deposit) + unusedRent;
-
-            const message = `Закрытие аренды для ${r.client_name}:\n\n` +
-                            `Использовано дней: ${daysUsed}\n` +
-                            `Стоимость аренды: ${formatMoney(sumRentUsed)}\n` +
-                            `Остаток от оплаты: ${formatMoney(unusedRent)}\n` +
-                            `Залог к возврату: ${formatMoney(r.deposit)}\n\n` +
-                            `ИТОГО К ВОЗВРАТУ КЛИЕНТУ: ${formatMoney(refundTotal)}\n\n` +
-                            `Вы уверены, что хотите закрыть эту аренду?`;
-
-            if (confirm(message)) {
-                await fetch(`${API_URL}?action=close_rental`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id })
-                });
-                loadRentals();
-            }
+            document.getElementById('close-rental-id').value = id;
+            document.getElementById('close-rental-date').value = new Date().toISOString().split('T')[0];
+            updateCloseInfo();
+            document.getElementById('close-rental-modal').classList.add('active');
         }
 
         async function deleteRental(id) {

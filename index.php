@@ -551,6 +551,7 @@
             <button class="nav-tab" onclick="showSection('eurolesa-cards')">💳 Евролеса (Карты)</button>
             <button class="nav-tab" onclick="showSection('eurolesa-cash')">💵 Евролеса (Наличка)</button>
             <a href="arenda.php" class="nav-tab" style="text-decoration: none; display: flex; align-items: center;">🏗️ Аренда</a>
+            <a href="sales.php" class="nav-tab" style="text-decoration: none; display: flex; align-items: center;">💰 Продажа лесов</a>
         </div>
 
         <!-- Раздел Антиквариата -->

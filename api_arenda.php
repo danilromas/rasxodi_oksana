@@ -18,7 +18,7 @@ try {
     // Инициализация таблиц
     $pdo->exec("CREATE TABLE IF NOT EXISTS arenda_rentals (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        type ENUM('ramnye', 'vyshka', 'lestnicy') NOT NULL,
+        type ENUM('ramnye', 'vyshka') NOT NULL,
         client_name VARCHAR(255) NOT NULL,
         dogovor VARCHAR(100),
         akt VARCHAR(100),
@@ -52,18 +52,18 @@ try {
 
     // Обновляем ENUM для type, если нужно (удаляем klinovye)
     // В MySQL это делается через MODIFY COLUMN
-    $pdo->exec("ALTER TABLE arenda_rentals MODIFY COLUMN type ENUM('ramnye', 'vyshka', 'lestnicy') NOT NULL");
+    $pdo->exec("ALTER TABLE arenda_rentals MODIFY COLUMN type ENUM('ramnye', 'vyshka') NOT NULL");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS arenda_inventory (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        category ENUM('ramnye', 'vyshka', 'lestnicy') NOT NULL,
+        category ENUM('ramnye', 'vyshka') NOT NULL,
         name VARCHAR(255) NOT NULL,
         quantity INT DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     // Обновляем ENUM для category в arenda_inventory
-    $pdo->exec("ALTER TABLE arenda_inventory MODIFY COLUMN category ENUM('ramnye', 'vyshka', 'lestnicy') NOT NULL");
+    $pdo->exec("ALTER TABLE arenda_inventory MODIFY COLUMN category ENUM('ramnye', 'vyshka') NOT NULL");
 
     // Начальные данные для склада, если таблица пуста
     $stmt = $pdo->query("SELECT COUNT(*) FROM arenda_inventory");
@@ -77,32 +77,73 @@ try {
             ['ramnye', 'Настил'],
             ['vyshka', 'Секция 1.2х2.0'],
             ['vyshka', 'Секция 0.7х1.6'],
-            ['vyshka', 'База с колесами'],
-            ['lestnicy', 'Лестница 3х7'],
-            ['lestnicy', 'Лестница 3х10']
+            ['vyshka', 'База с колесами']
         ];
         $insert = $pdo->prepare("INSERT INTO arenda_inventory (category, name, quantity) VALUES (?, ?, 0)");
         foreach ($inventory_items as $item) {
             $insert->execute($item);
         }
     } else {
-        // Удаляем записи klinovye из инвентаря если они есть
-        $pdo->exec("DELETE FROM arenda_inventory WHERE category = 'klinovye'");
+        // Удаляем записи klinovye и lestnicy из инвентаря если они есть
+        $pdo->exec("DELETE FROM arenda_inventory WHERE category IN ('klinovye', 'lestnicy')");
     }
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS arenda_rental_adjustments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        rental_id INT NOT NULL,
+        date_change DATE NOT NULL,
+        new_daily_rate DECIMAL(10, 2),
+        new_square_meters DECIMAL(10, 2),
+        comment TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (rental_id) REFERENCES arenda_rentals(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     switch ($action) {
         case 'get_rentals':
             $stmt = $pdo->query("SELECT *, DATEDIFF(CURDATE(), date_start) + 1 as days FROM arenda_rentals ORDER BY date_start DESC");
             $rentals = $stmt->fetchAll();
-            $rentals = array_map(function($r) {
+            
+            // Получаем все корректировки для каждой аренды
+            foreach ($rentals as &$r) {
+                $adjStmt = $pdo->prepare("SELECT * FROM arenda_rental_adjustments WHERE rental_id = ? ORDER BY date_change ASC");
+                $adjStmt->execute([$r['id']]);
+                $r['adjustments'] = $adjStmt->fetchAll();
+                
                 $r['daily_rate'] = (float)$r['daily_rate'];
                 $r['deposit'] = (float)$r['deposit'];
                 $r['paid_rent'] = (float)$r['paid_rent'];
                 $r['square_meters'] = (float)$r['square_meters'];
                 $r['days'] = (int)$r['days'];
-                return $r;
-            }, $rentals);
+            }
             echo json_encode($rentals);
+            break;
+
+        case 'save_adjustment':
+            if ($method === 'POST') {
+                $stmt = $pdo->prepare("INSERT INTO arenda_rental_adjustments (
+                    rental_id, date_change, new_daily_rate, new_square_meters, comment
+                ) VALUES (
+                    :rental_id, :date_change, :new_daily_rate, :new_square_meters, :comment
+                )");
+                
+                $stmt->execute([
+                    ':rental_id' => $input['rental_id'],
+                    ':date_change' => $input['date_change'],
+                    ':new_daily_rate' => $input['new_daily_rate'],
+                    ':new_square_meters' => $input['new_square_meters'],
+                    ':comment' => $input['comment'] ?? ''
+                ]);
+                echo json_encode(['success' => true]);
+            }
+            break;
+
+        case 'delete_adjustment':
+            if ($method === 'DELETE' && isset($_GET['id'])) {
+                $stmt = $pdo->prepare("DELETE FROM arenda_rental_adjustments WHERE id = ?");
+                $stmt->execute([$_GET['id']]);
+                echo json_encode(['success' => true]);
+            }
             break;
 
         case 'save_rental':
@@ -169,8 +210,9 @@ try {
 
         case 'close_rental':
             if ($method === 'POST' && isset($input['id'])) {
-                $stmt = $pdo->prepare("UPDATE arenda_rentals SET status = 'closed', date_end = CURDATE() WHERE id = ?");
-                $stmt->execute([$input['id']]);
+                $date_end = !empty($input['date_end']) ? $input['date_end'] : date('Y-m-d');
+                $stmt = $pdo->prepare("UPDATE arenda_rentals SET status = 'closed', date_end = ? WHERE id = ?");
+                $stmt->execute([$date_end, $input['id']]);
                 echo json_encode(['success' => true]);
             }
             break;
