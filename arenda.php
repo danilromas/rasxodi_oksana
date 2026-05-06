@@ -185,6 +185,9 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2>Активные аренды</h2>
                     <div style="display: flex; gap: 10px;">
+                        <input type="date" id="export-date-from" title="Дата с" style="padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
+                        <input type="date" id="export-date-to" title="Дата по" style="padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
+                        <button class="btn-primary" onclick="exportRentalsExcel()">📥 Excel (период)</button>
                         <input type="text" id="rental-search" placeholder="Поиск (имя, договор, тел)..." oninput="filterRentals()" style="padding: 10px; border-radius: 8px; border: 1px solid #ddd; width: 250px;">
                         <select id="rental-filter-type" onchange="filterRentals()" style="padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
                             <option value="all">Все типы</option>
@@ -494,6 +497,8 @@
             document.getElementById('calc-date').value = today;
             document.getElementById('profit-start').value = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
             document.getElementById('profit-end').value = today;
+            document.getElementById('export-date-from').value = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+            document.getElementById('export-date-to').value = today;
             loadData();
         });
 
@@ -1201,6 +1206,24 @@
 
         function editRental(id) {
             openRentalModal(id);
+        }
+
+        function exportRentalsExcel() {
+            const dateFrom = document.getElementById('export-date-from').value;
+            const dateTo = document.getElementById('export-date-to').value;
+
+            if (!dateFrom || !dateTo) {
+                alert('Укажите период: дату "с" и дату "по".');
+                return;
+            }
+
+            if (dateFrom > dateTo) {
+                alert('Дата "с" не может быть больше даты "по".');
+                return;
+            }
+
+            const url = `${API_URL}?action=export_rentals_excel&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`;
+            window.open(url, '_blank');
         }
     </script>
 </body>

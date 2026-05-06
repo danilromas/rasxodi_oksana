@@ -1,5 +1,4 @@
 <?php
-header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -13,6 +12,10 @@ require_once 'db1.php';
 $method = $_SERVER['REQUEST_METHOD'];
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 $input = json_decode(file_get_contents('php://input'), true);
+
+if ($action !== 'export_rentals_excel') {
+    header('Content-Type: application/json');
+}
 
 try {
     // Инициализация таблиц
@@ -235,6 +238,162 @@ try {
                     ':id' => $input['id']
                 ]);
                 echo json_encode(['success' => true]);
+            }
+            break;
+
+        case 'export_rentals_excel':
+            if ($method === 'GET') {
+                $dateFrom = isset($_GET['date_from']) ? trim($_GET['date_from']) : '';
+                $dateTo = isset($_GET['date_to']) ? trim($_GET['date_to']) : '';
+
+                if (!$dateFrom || !$dateTo) {
+                    http_response_code(400);
+                    header('Content-Type: application/json');
+                    echo json_encode(['error' => 'Параметры date_from и date_to обязательны']);
+                    break;
+                }
+
+                $stmt = $pdo->prepare("
+                    SELECT 
+                        r.*
+                    FROM arenda_rentals r
+                    WHERE r.date_start BETWEEN :date_from AND :date_to
+                    ORDER BY r.date_start ASC, r.id ASC
+                ");
+                $stmt->execute([
+                    ':date_from' => $dateFrom,
+                    ':date_to' => $dateTo
+                ]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $fileName = 'arenda_buh_' . $dateFrom . '_to_' . $dateTo . '.xls';
+                header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
+                header('Content-Disposition: attachment; filename="' . $fileName . '"');
+                header('Pragma: no-cache');
+                header('Expires: 0');
+
+                echo "\xEF\xBB\xBF";
+                echo '<html><head><meta charset="UTF-8">';
+                echo '<style>
+                    table { border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 12px; }
+                    th, td { border: 1px solid #d9d9d9; padding: 6px 8px; vertical-align: top; }
+                    .title { background: #1f4e78; color: #fff; font-size: 14px; font-weight: bold; text-align: left; }
+                    .header { background: #ddebf7; font-weight: bold; text-align: center; }
+                    .num { text-align: right; white-space: nowrap; }
+                    .center { text-align: center; white-space: nowrap; }
+                    .text { text-align: left; }
+                    .summary { background: #e2f0d9; font-weight: bold; }
+                    .closed { background: #f2f2f2; }
+                    .active { background: #ffffff; }
+                </style></head><body>';
+
+                echo '<table>';
+                echo '<colgroup>
+                        <col style="width: 50px;">
+                        <col style="width: 90px;">
+                        <col style="width: 220px;">
+                        <col style="width: 120px;">
+                        <col style="width: 120px;">
+                        <col style="width: 95px;">
+                        <col style="width: 95px;">
+                        <col style="width: 95px;">
+                        <col style="width: 110px;">
+                        <col style="width: 110px;">
+                        <col style="width: 130px;">
+                        <col style="width: 90px;">
+                        <col style="width: 130px;">
+                        <col style="width: 120px;">
+                        <col style="width: 100px;">
+                        <col style="width: 80px;">
+                        <col style="width: 280px;">
+                        <col style="width: 140px;">
+                        <col style="width: 140px;">
+                    </colgroup>';
+
+                echo '<tr><th class="title" colspan="19">Аренда и Склад - выгрузка для бухгалтерии | Период: ' 
+                    . htmlspecialchars($dateFrom) . ' - ' . htmlspecialchars($dateTo) . '</th></tr>';
+
+                echo '<tr>';
+                foreach ([
+                    'ID',
+                    'Тип',
+                    'Клиент',
+                    'Договор',
+                    'Акт',
+                    'Дата начала',
+                    'Дата завершения',
+                    'Статус',
+                    'Цена за сутки',
+                    'Залог',
+                    'Оплачено за аренду',
+                    'Площадь (м2)',
+                    'Телефон',
+                    'Дата последнего платежа',
+                    'Дата звонка',
+                    'Должник',
+                    'Комментарий',
+                    'Создано',
+                    'Обновлено'
+                ] as $h) {
+                    echo '<th class="header">' . htmlspecialchars($h) . '</th>';
+                }
+                echo '</tr>';
+
+                $sumDaily = 0.0;
+                $sumDeposit = 0.0;
+                $sumPaid = 0.0;
+                $sumM2 = 0.0;
+
+                foreach ($rows as $r) {
+                    $typeLabel = $r['type'] === 'ramnye' ? 'Рамные' : 'Вышка';
+                    $statusLabel = $r['status'] === 'closed' ? 'Завершена' : 'Активна';
+                    $isDebtorLabel = ((int)$r['is_debtor'] === 1) ? 'Да' : 'Нет';
+                    $rowClass = $r['status'] === 'closed' ? 'closed' : 'active';
+
+                    $dailyRate = (float)$r['daily_rate'];
+                    $deposit = (float)$r['deposit'];
+                    $paidRent = (float)$r['paid_rent'];
+                    $squareMeters = (float)$r['square_meters'];
+
+                    $sumDaily += $dailyRate;
+                    $sumDeposit += $deposit;
+                    $sumPaid += $paidRent;
+                    $sumM2 += $squareMeters;
+
+                    echo '<tr class="' . $rowClass . '">';
+                    echo '<td class="center">' . (int)$r['id'] . '</td>';
+                    echo '<td class="center">' . htmlspecialchars($typeLabel) . '</td>';
+                    echo '<td class="text">' . htmlspecialchars((string)$r['client_name']) . '</td>';
+                    echo '<td class="text">' . htmlspecialchars((string)$r['dogovor']) . '</td>';
+                    echo '<td class="text">' . htmlspecialchars((string)$r['akt']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['date_start']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['date_end']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars($statusLabel) . '</td>';
+                    echo '<td class="num">' . number_format($dailyRate, 2, '.', ' ') . '</td>';
+                    echo '<td class="num">' . number_format($deposit, 2, '.', ' ') . '</td>';
+                    echo '<td class="num">' . number_format($paidRent, 2, '.', ' ') . '</td>';
+                    echo '<td class="num">' . number_format($squareMeters, 2, '.', ' ') . '</td>';
+                    echo '<td class="text">' . htmlspecialchars((string)$r['phone']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['last_payment_date']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['call_date']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars($isDebtorLabel) . '</td>';
+                    echo '<td class="text">' . htmlspecialchars(preg_replace("/[\r\n\t]+/", ' ', (string)$r['comment'])) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['created_at']) . '</td>';
+                    echo '<td class="center">' . htmlspecialchars((string)$r['updated_at']) . '</td>';
+                    echo '</tr>';
+                }
+
+                echo '<tr class="summary">';
+                echo '<td class="center" colspan="8">ИТОГО (' . count($rows) . ' записей)</td>';
+                echo '<td class="num">' . number_format($sumDaily, 2, '.', ' ') . '</td>';
+                echo '<td class="num">' . number_format($sumDeposit, 2, '.', ' ') . '</td>';
+                echo '<td class="num">' . number_format($sumPaid, 2, '.', ' ') . '</td>';
+                echo '<td class="num">' . number_format($sumM2, 2, '.', ' ') . '</td>';
+                echo '<td colspan="7"></td>';
+                echo '</tr>';
+
+                echo '</table></body></html>';
+                exit;
             }
             break;
 
